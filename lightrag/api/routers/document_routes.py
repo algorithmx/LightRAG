@@ -476,10 +476,12 @@ class DocumentManager:
         self,
         input_dir: str,
         workspace: str = "",  # New parameter for workspace isolation
-        supported_extensions: tuple = (
+        supported_extensions: tuple = None,  # Allow dynamic configuration
+    ):
+        # Initialize base supported extensions
+        base_extensions = (
             ".txt",
             ".md",
-            ".pdf",
             ".docx",
             ".pptx",
             ".xlsx",
@@ -501,6 +503,19 @@ class DocumentManager:
             ".sql",  # SQL scripts
             ".bat",  # Batch files
             ".sh",  # Shell scripts
+        )
+
+        # Add PDF support if processor is available
+        from lightrag.pdf_processor import is_pdf_processing_available
+
+        if is_pdf_processing_available():
+            base_extensions = base_extensions + (".pdf",)
+            logger.info("PDF processing is available - PDF files will be supported")
+        else:
+            logger.warning("PDF processing not available - PDF files will not be supported")
+
+        # Add programming language extensions
+        programming_extensions = (
             ".c",  # C source code
             ".cpp",  # C++ source code
             ".py",  # Python source code
@@ -514,12 +529,20 @@ class DocumentManager:
             ".css",  # Cascading Style Sheets
             ".scss",  # Sassy CSS
             ".less",  # LESS CSS
-        ),
-    ):
+        )
+
+        # Combine all extensions
+        all_extensions = base_extensions + programming_extensions
+
+        # Use provided extensions or default with PDF support check
+        if supported_extensions is None:
+            self.supported_extensions = all_extensions
+        else:
+            self.supported_extensions = supported_extensions
+
         # Store the base input directory and workspace
         self.base_input_dir = Path(input_dir)
         self.workspace = workspace
-        self.supported_extensions = supported_extensions
         self.indexed_files = set()
 
         # Create workspace-specific input directory
@@ -626,24 +649,44 @@ async def pipeline_enqueue_file(rag: LightRAG, file_path: Path) -> bool:
                     )
                     return False
             case ".pdf":
-                if global_args.document_loading_engine == "DOCLING":
-                    if not pm.is_installed("docling"):  # type: ignore
-                        pm.install("docling")
-                    from docling.document_converter import DocumentConverter  # type: ignore
+                # Use the improved PDF processor wrapper
+                try:
+                    from lightrag.pdf_processor import extract_pdf_text, is_pdf_processing_available
 
-                    converter = DocumentConverter()
-                    result = converter.convert(file_path)
-                    content = result.document.export_to_markdown()
-                else:
-                    if not pm.is_installed("pypdf2"):  # type: ignore
-                        pm.install("pypdf2")
-                    from PyPDF2 import PdfReader  # type: ignore
-                    from io import BytesIO
+                    if not is_pdf_processing_available():
+                        logger.error(f"PDF processing not available for {file_path.name}. Install PyPDF2 or PyMuPDF.")
+                        return False
 
-                    pdf_file = BytesIO(file)
-                    reader = PdfReader(pdf_file)
-                    for page in reader.pages:
-                        content += page.extract_text() + "\n"
+                    # Use the PDF processor wrapper for better handling
+                    content = extract_pdf_text(file_path)
+
+                    if not content.strip():
+                        logger.warning(f"No text extracted from PDF: {file_path.name}")
+                        return False
+
+                    logger.info(f"Successfully extracted text from PDF: {file_path.name}")
+
+                except Exception as e:
+                    logger.error(f"Failed to process PDF {file_path.name}: {str(e)}")
+                    # Fallback to original implementation if PDF processor fails
+                    if global_args.document_loading_engine == "DOCLING":
+                        if not pm.is_installed("docling"):  # type: ignore
+                            pm.install("docling")
+                        from docling.document_converter import DocumentConverter  # type: ignore
+
+                        converter = DocumentConverter()
+                        result = converter.convert(file_path)
+                        content = result.document.export_to_markdown()
+                    else:
+                        if not pm.is_installed("pypdf2"):  # type: ignore
+                            pm.install("pypdf2")
+                        from PyPDF2 import PdfReader  # type: ignore
+                        from io import BytesIO
+
+                        pdf_file = BytesIO(file)
+                        reader = PdfReader(pdf_file)
+                        for page in reader.pages:
+                            content += page.extract_text() + "\n"
             case ".docx":
                 if global_args.document_loading_engine == "DOCLING":
                     if not pm.is_installed("docling"):  # type: ignore

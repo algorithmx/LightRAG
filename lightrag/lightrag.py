@@ -654,6 +654,135 @@ class LightRAG:
             )
         )
 
+    def insert_file(
+        self,
+        file_path: str,
+        split_by_character: str | None = None,
+        split_by_character_only: bool = False,
+        doc_id: str | None = None,
+    ) -> bool:
+        """
+        Insert document from file with automatic format detection and PDF support.
+
+        Args:
+            file_path: Path to the document file
+            split_by_character: Character to split by if needed
+            split_by_character_only: Whether to split by character only
+            doc_id: Optional document ID, if not provided, will be generated from file path
+
+        Returns:
+            True if insertion successful, False otherwise
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(
+            self.ainsert_file(file_path, split_by_character, split_by_character_only, doc_id)
+        )
+
+    async def ainsert_file(
+        self,
+        file_path: str,
+        split_by_character: str | None = None,
+        split_by_character_only: bool = False,
+        doc_id: str | None = None,
+    ) -> bool:
+        """
+        Asynchronously insert document from file with automatic format detection and PDF support.
+
+        Args:
+            file_path: Path to the document file
+            split_by_character: Character to split by if needed
+            split_by_character_only: Whether to split by character only
+            doc_id: Optional document ID, if not provided, will be generated from file path
+
+        Returns:
+            True if insertion successful, False otherwise
+        """
+        from pathlib import Path
+        from .utils import clean_text
+
+        try:
+            file_path_obj = Path(file_path)
+
+            if not file_path_obj.exists():
+                logger.error(f"File not found: {file_path}")
+                return False
+
+            # Extract content based on file type
+            content = ""
+            file_extension = file_path_obj.suffix.lower()
+
+            if file_extension == '.pdf':
+                # Use PDF processor for PDF files
+                from .pdf_processor import extract_pdf_text, is_pdf_processing_available
+
+                if not is_pdf_processing_available():
+                    logger.error(f"PDF processing not available for {file_path}. Install PyPDF2 or PyMuPDF.")
+                    return False
+
+                try:
+                    content = extract_pdf_text(file_path)
+                    if not content.strip():
+                        logger.warning(f"No text extracted from PDF: {file_path}")
+                        return False
+                    logger.info(f"Successfully extracted text from PDF: {file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to extract text from PDF {file_path}: {str(e)}")
+                    return False
+
+            elif file_extension in {'.txt', '.md'}:
+                # Handle text files with encoding detection
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    # Try alternative encodings
+                    for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            with open(file_path, 'r', encoding=encoding) as f:
+                                content = f.read()
+                            logger.debug(f"Successfully read {file_path} with {encoding} encoding")
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    else:
+                        logger.error(f"Could not decode text file: {file_path}")
+                        return False
+            else:
+                logger.warning(f"Unsupported file type: {file_extension} for {file_path}")
+                return False
+
+            # Clean and process content
+            if content.strip():
+                cleaned_content = clean_text(content)
+
+                if cleaned_content.strip():
+                    # Generate document ID if not provided
+                    if doc_id is None:
+                        from .utils import compute_mdhash_id
+                        doc_id = compute_mdhash_id(file_path, prefix="file-")
+
+                    # Insert using existing ainsert method
+                    await self.ainsert(
+                        cleaned_content,
+                        split_by_character=split_by_character,
+                        split_by_character_only=split_by_character_only,
+                        ids=doc_id,
+                        file_paths=file_path
+                    )
+
+                    logger.info(f"Successfully inserted document from file: {file_path}")
+                    return True
+                else:
+                    logger.warning(f"Document became empty after cleaning: {file_path}")
+                    return False
+            else:
+                logger.warning(f"Empty document: {file_path}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to insert file {file_path}: {str(e)}")
+            return False
+
     async def ainsert(
         self,
         input: str | list[str],
@@ -2437,4 +2566,135 @@ class LightRAG:
 
         loop.run_until_complete(
             self.aexport_data(output_path, file_format, include_vector_data)
+        )
+
+    def export_for_transfer(
+        self,
+        output_path: str,
+        include_embeddings: bool = False,
+        include_llm_cache: bool = True,
+        include_documents: bool = True,
+        document_paths: Optional[List[str]] = None,
+        compression_enabled: bool = True
+    ) -> str:
+        """
+        Export knowledge graph for transfer to another LightRAG instance.
+
+        This method creates a comprehensive transfer package that can be imported
+        into another LightRAG instance, potentially with different LLM and embedding models.
+
+        Args:
+            output_path: Directory path where transfer package will be created
+            include_embeddings: Whether to include vector embeddings (set False if target uses different embedding model)
+            include_llm_cache: Whether to include LLM response cache (recommended for efficiency)
+            include_documents: Whether to include original documents
+            document_paths: Additional document paths to include in transfer
+            compression_enabled: Whether to compress the transfer package
+
+        Returns:
+            Path to created transfer package
+
+        Example:
+            # Export for transfer to server with different embedding model
+            package_path = rag.export_for_transfer(
+                output_path="./transfer_package",
+                include_embeddings=False,  # Will regenerate with target model
+                include_llm_cache=True,    # Keep cache for efficiency
+                include_documents=True     # Include original documents
+            )
+        """
+        from .transfer import KnowledgeGraphTransfer, TransferConfig
+
+        transfer = KnowledgeGraphTransfer(self)
+        config = TransferConfig(
+            include_embeddings=include_embeddings,
+            include_llm_cache=include_llm_cache,
+            include_documents=include_documents,
+            compression_enabled=compression_enabled,
+            verify_integrity=True
+        )
+
+        return transfer.export_for_transfer(
+            output_path=output_path,
+            config=config,
+            document_paths=document_paths
+        )
+
+    async def aimport_from_transfer(
+        self,
+        transfer_package_path: str,
+        regenerate_embeddings: bool = True,
+        include_llm_cache: bool = True,
+        verify_integrity: bool = True
+    ) -> bool:
+        """
+        Asynchronously import knowledge graph from transfer package.
+
+        Args:
+            transfer_package_path: Path to transfer package
+            regenerate_embeddings: Whether to regenerate embeddings with current embedding model
+            include_llm_cache: Whether to import LLM response cache
+            verify_integrity: Whether to verify transfer integrity
+
+        Returns:
+            True if import successful, False otherwise
+        """
+        from .transfer import KnowledgeGraphTransfer, TransferConfig
+
+        transfer = KnowledgeGraphTransfer()
+        config = TransferConfig(
+            include_embeddings=not regenerate_embeddings,
+            include_llm_cache=include_llm_cache,
+            include_documents=True,
+            verify_integrity=verify_integrity,
+            regenerate_embeddings=regenerate_embeddings
+        )
+
+        return await transfer.import_from_transfer(
+            target_rag=self,
+            transfer_package_path=transfer_package_path,
+            config=config
+        )
+
+    def import_from_transfer(
+        self,
+        transfer_package_path: str,
+        regenerate_embeddings: bool = True,
+        include_llm_cache: bool = True,
+        verify_integrity: bool = True
+    ) -> bool:
+        """
+        Synchronously import knowledge graph from transfer package.
+
+        Args:
+            transfer_package_path: Path to transfer package
+            regenerate_embeddings: Whether to regenerate embeddings with current embedding model
+            include_llm_cache: Whether to import LLM response cache
+            verify_integrity: Whether to verify transfer integrity
+
+        Returns:
+            True if import successful, False otherwise
+
+        Example:
+            # Import transfer package and regenerate embeddings
+            success = target_rag.import_from_transfer(
+                transfer_package_path="./transfer_package.tar.gz",
+                regenerate_embeddings=True,  # Use target embedding model
+                include_llm_cache=True,      # Import cache for efficiency
+                verify_integrity=True        # Verify transfer completed correctly
+            )
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(
+            self.aimport_from_transfer(
+                transfer_package_path=transfer_package_path,
+                regenerate_embeddings=regenerate_embeddings,
+                include_llm_cache=include_llm_cache,
+                verify_integrity=verify_integrity
+            )
         )
