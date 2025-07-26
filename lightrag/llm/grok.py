@@ -355,41 +355,7 @@ async def grok_embed(
     Returns:
         numpy array of shape (len(texts), embedding_dimension) containing the embeddings
     """
-    if not api_key:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("OPENAI_API_KEY environment variable not set")
-            raise ValueError(
-                "OPENAI_API_KEY environment variable is required for embeddings. "
-                "xAI Grok doesn't provide embedding models, so we use OpenAI as fallback."
-            )
-
-    try:
-        # Use OpenAI client for embeddings
-        from openai import AsyncOpenAI
-
-        openai_client = AsyncOpenAI(api_key=api_key)
-
-        # Get embeddings
-        response = await openai_client.embeddings.create(
-            model=model,
-            input=texts,
-            encoding_format="float"
-        )
-
-        # Convert to numpy array
-        embeddings = np.array([dp.embedding for dp in response.data], dtype=np.float32)
-
-        logger.debug(f"Generated embeddings for {len(texts)} texts using OpenAI {model}")
-        verbose_debug(f"Embedding shape: {embeddings.shape}")
-
-        return embeddings
-
-    except Exception as e:
-        logger.error(f"OpenAI embedding failed: {str(e)}")
-        raise
-    finally:
-        await openai_client.close()
+    raise NotImplementedError("xAI Grok doesn't provide embedding models.")
 
 
 # Helper function to get available Grok models

@@ -1,7 +1,8 @@
 import os
 import asyncio
 from lightrag import LightRAG, QueryParam
-from lightrag.llm.grok import grok_4_complete, grok_3_complete, grok_3_mini_complete, grok_embed
+from lightrag.llm.grok import grok_4_complete, grok_3_complete, grok_3_mini_complete
+from lightrag.llm.openai import openai_embed
 from lightrag.utils import EmbeddingFunc
 from lightrag.kg.shared_storage import initialize_pipeline_status
 
@@ -31,7 +32,7 @@ async def main():
         embedding_func=EmbeddingFunc(
             embedding_dim=1536,
             max_token_size=8191,
-            func=grok_embed,  # Use OpenAI embeddings as fallback
+            func=openai_embed,  # Use OpenAI embeddings as fallback
         ),
     )
 
